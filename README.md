@@ -1,3 +1,2 @@
-更新非常缓慢！
-实践学习到的知识！
-用Unity还原MLP里的一些效果！
+学不完，根本学不完呜呜呜QWQ
+B站主页：https://space.bilibili.com/387420685
