@@ -1,0 +1,92 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: "\u5143\u7403Cube"
+  m_Shader: {fileID: 4800000, guid: 3e19eda18fcc991448db0ef9c3de1109, type: 3}
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords:
+  - _ISMAGICMBHEBING_ON
+  - _ISMULTICOLOR_ON
+  m_InvalidKeywords: []
+  m_LightmapFlags: 4
+  m_EnableInstancingVariants: 0
+  m_DoubleSidedGI: 0
+  m_CustomRenderQueue: -1
+  stringTagMap: {}
+  disabledShaderPasses: []
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs:
+    - _MagicMetaballNoise:
+        m_Texture: {fileID: 11700000, guid: 38a70761d9867ad4b824675c918b8862, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    m_Ints: []
+    m_Floats:
+    - _AllAlpha: 0.8
+    - _ColorControlSmooth: 0.1
+    - _MagicFluSpeed: 3.6
+    - _MagicGuangYun: -1.55
+    - _MagicMetaballMeshXiFeng: 1
+    - _MagicMetaballNoiTint: 0.7
+    - _MagicMetaballNoiseTint: 0.64
+    - _MagicRimLight: 1.75
+    - _MagicRimLightTint: 1.75
+    - _MagicRimLightWidth: 0
+    - _RongHeThreshold: 1
+    - _SDF_PerNum: 3
+    - _SDF_RongHeTint: 0.3
+    - _SDF_S_Body_H: 1
+    - _SDF_S_Body_R1: 1
+    - _SDF_S_Body_R2: 1
+    - _SDF_S_Head_R: 1
+    - _SDF_S_LFoot_H: 1
+    - _SDF_S_LFoot_R1: 1
+    - _SDF_S_LFoot_R2: 1
+    - _SDF_S_LHand_H: 1
+    - _SDF_S_LHand_R1: 1
+    - _SDF_S_LHand_R2: 1
+    - _SDF_S_RFoot_H: 1
+    - _SDF_S_RFoot_R1: 1
+    - _SDF_S_RFoot_R2: 1
+    - _SDF_S_RHand_H: 1
+    - _SDF_S_RHand_R1: 1
+    - _SDF_S_RHand_R2: 1
+    - _SDF_StepNum: 70
+    - _SDF_h: 15.92
+    - _SDF_r1: 34.25
+    - _SDF_r2: 55.9
+    - _isMagicMBHeBing: 1
+    - _isMultiColor: 1
+    m_Colors:
+    - _BaseColor: {r: 1, g: 1, b: 1, a: 1}
+    - _Color: {r: 1, g: 1, b: 1, a: 1}
+    - _MagicMBNoiScale: {r: 10, g: 10, b: 10, a: 4.75}
+    - _SDF_Postion: {r: 0, g: 0, b: 0, a: 0}
+    - _SDF_S_Body_Pos: {r: 0, g: 0, b: 0, a: 0}
+    - _SDF_S_Body_Rot: {r: 0, g: 0, b: 0, a: 0}
+    - _SDF_S_Head_Pos: {r: 0, g: 0, b: 0, a: 0}
+    - _SDF_S_LFoot_Pos: {r: 0, g: 0, b: 0, a: 0}
+    - _SDF_S_LFoot_Rot: {r: 0, g: 0, b: 0, a: 0}
+    - _SDF_S_LHand_Pos: {r: 0, g: 0, b: 0, a: 0}
+    - _SDF_S_LHand_Rot: {r: 0, g: 0, b: 0, a: 0}
+    - _SDF_S_LWing_Pos: {r: 0, g: 0, b: 0, a: 0}
+    - _SDF_S_LWing_Rot: {r: 0, g: 0, b: 0, a: 0}
+    - _SDF_S_LWing_S: {r: 0, g: 0, b: 0, a: 0}
+    - _SDF_S_RFoot_Pos: {r: 0, g: 0, b: 0, a: 0}
+    - _SDF_S_RFoot_Rot: {r: 0, g: 0, b: 0, a: 0}
+    - _SDF_S_RHand_Pos: {r: 0, g: 0, b: 0, a: 0}
+    - _SDF_S_RHand_Rot: {r: 0, g: 0, b: 0, a: 0}
+    - _SDF_S_RWing_Pos: {r: 0, g: 0, b: 0, a: 0}
+    - _SDF_S_RWing_Rot: {r: 0, g: 0, b: 0, a: 0}
+    - _SDF_S_RWing_S: {r: 0, g: 0, b: 0, a: 0}
+  m_BuildTextureStacks: []
+  m_AllowLocking: 1
