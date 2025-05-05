@@ -1,0 +1,47 @@
+﻿#pragma kernel MagicMetaballMatrixCS
+
+struct MMBMatrData
+{
+    float3 up_Rf;
+    float3 up_Rb;
+    float3 up_Lf;
+    float3 up_Lb;
+    //////////////
+    float3 down_Rf;
+    float3 down_Rb;
+    float3 down_Lf;
+    float3 down_Lb;
+    //////////////
+    float4x4 WtLMatrix;
+    //结果
+    float4 fboffset;
+};
+RWStructuredBuffer<MMBMatrData> mmbMatrData;
+
+uint MMBCSDataLen;
+
+[numthreads(8, 1, 1)]
+void MagicMetaballMatrixCS(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= MMBCSDataLen) return;
+    
+    float3 up_Rf = mul(mmbMatrData[id.x].WtLMatrix, float4(mmbMatrData[id.x].up_Rf, 1)).xyz;
+    float3 up_Rb = mul(mmbMatrData[id.x].WtLMatrix, float4(mmbMatrData[id.x].up_Rb, 1)).xyz;
+    float3 up_Lf = mul(mmbMatrData[id.x].WtLMatrix, float4(mmbMatrData[id.x].up_Lf, 1)).xyz;
+    float3 up_Lb = mul(mmbMatrData[id.x].WtLMatrix, float4(mmbMatrData[id.x].up_Lb, 1)).xyz;
+    float3 down_Rf = mul(mmbMatrData[id.x].WtLMatrix, float4(mmbMatrData[id.x].down_Rf, 1)).xyz;
+    float3 down_Rb = mul(mmbMatrData[id.x].WtLMatrix, float4(mmbMatrData[id.x].down_Rb, 1)).xyz;
+    float3 down_Lf = mul(mmbMatrData[id.x].WtLMatrix, float4(mmbMatrData[id.x].down_Lf, 1)).xyz;
+    float3 down_Lb = mul(mmbMatrData[id.x].WtLMatrix, float4(mmbMatrData[id.x].down_Lb, 1)).xyz;
+    
+    float left = min(min(min(min(min(min(min(up_Rf.x, up_Rb.x), up_Lf.x), up_Lb.x), down_Rf.x), down_Rb.x), down_Lf.x), down_Lb.x);
+    float right = max(max(max(max(max(max(max(up_Rf.x, up_Rb.x), up_Lf.x), up_Lb.x), down_Rf.x), down_Rb.x), down_Lf.x), down_Lb.x);
+    float up = max(max(max(max(max(max(max(up_Rf.y, up_Rb.y), up_Lf.y), up_Lb.y), down_Rf.y), down_Rb.y), down_Lf.y), down_Lb.y);
+    float down = min(min(min(min(min(min(min(up_Rf.y, up_Rb.y), up_Lf.y), up_Lb.y), down_Rf.y), down_Rb.y), down_Lf.y), down_Lb.y);
+    float forward = max(max(max(max(max(max(max(up_Rf.z, up_Rb.z), up_Lf.z), up_Lb.z), down_Rf.z), down_Rb.z), down_Lf.z), down_Lb.z);
+    float back = min(min(min(min(min(min(min(up_Rf.z, up_Rb.z), up_Lf.z), up_Lb.z), down_Rf.z), down_Rb.z), down_Lf.z), down_Lb.z);
+
+    float2 offset = float2((-left - right) / 40, (down + up) / 20);
+    mmbMatrData[id.x].fboffset = float4(forward, back, offset);
+
+}
