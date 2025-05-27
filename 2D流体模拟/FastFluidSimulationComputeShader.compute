@@ -1,0 +1,496 @@
+﻿#pragma kernel InitData
+#pragma kernel AddForce
+#pragma kernel Advect
+#pragma kernel VorticityConfinement
+#pragma kernel VelocityTemp
+#pragma kernel UpdateVelocityTemp
+#pragma kernel UpdateVelocityStag
+#pragma kernel UpdateVelocity
+//#pragma kernel Divergence
+//#pragma kernel ComputePressure
+//#pragma kernel SubtractPressureGradient
+#pragma kernel UseForceTex
+#pragma kernel UseObstaclesTex
+#include "FastFluidSimulationCSLibrary.hlsl"
+
+int2 TexSize;
+float2 inverseTexSize;
+float TimeStep;
+float MaxVelocity;
+float ForceSize;
+float CurlTint;
+
+float2 MousePos0;
+float2 MousePos1;
+float MouseTint;
+float2 ForceDir;
+
+float velocityDissipation;
+float densityDissipation;
+//float gradientScale;
+float4 obstaclesCol;
+
+RWStructuredBuffer<CellData> cellData;
+RWStructuredBuffer<StaggeredData> UstaggeredData;
+RWStructuredBuffer<StaggeredData> VstaggeredData;
+RWStructuredBuffer<float> UTempVeloData;
+RWStructuredBuffer<float> VTempVeloData;
+RWStructuredBuffer<float2> CurlData;
+
+RWTexture2D<float4> FluidTex;
+Texture2D<float4> ForceTex;
+Texture2D<float> ObstaclesTex;
+
+[numthreads(32, 32, 1)]
+void InitData(uint3 id : SV_DispatchThreadID)
+{
+    int2 ID = int2(id.x, TexSize.y - id.y);
+    int2 ID_r = ID + offset_r;
+    int2 ID_u = ID + offset_u;
+    int index = UvToIndex(ID, TexSize);
+
+    cellData[index].velocity = float2(0, 0);
+    cellData[index].density = 0;
+    //cellData[index].pressure = 0;
+    //cellData[index].divergence = 0;
+    cellData[index].obstacles = 0;
+    cellData[index].veloDissipation = velocityDissipation;
+    
+    cellData[index].leftStagIndex = UvToIndex2(ID, TexSize);
+    cellData[index].rightStagIndex = UvToIndex2(ID_r, TexSize);
+    cellData[index].downStagIndex = index;
+    cellData[index].upStagIndex = UvToIndex(ID_u, TexSize);
+    
+    cellData[index].edge = int4(1, 1, 1, 1);
+    if (ID.x == 0)
+    {
+        cellData[index].edge.z = 0;
+        cellData[index].obstacles = 1;
+    }
+    UstaggeredData[cellData[index].leftStagIndex].velocity = 0;
+    UstaggeredData[cellData[index].leftStagIndex].nextLorDIndex = 2 * cellData[index].rightStagIndex;
+    UstaggeredData[cellData[index].leftStagIndex].RorUIndex = 2 * cellData[index].leftStagIndex + 1;
+    if (ID.x == TexSize.x)
+    {
+        cellData[index].edge.w = 0;
+        cellData[index].obstacles = 1;
+        
+        UstaggeredData[cellData[index].rightStagIndex].velocity = 0;
+        UstaggeredData[cellData[index].rightStagIndex].nextLorDIndex = -1;
+        UstaggeredData[cellData[index].rightStagIndex].RorUIndex = 2 * cellData[index].rightStagIndex + 1;
+    }
+    if (ID.y == 0)
+    {
+        cellData[index].edge.y = 0;
+        cellData[index].obstacles = 1;
+    }
+    VstaggeredData[cellData[index].downStagIndex].velocity = 0;
+    VstaggeredData[cellData[index].downStagIndex].nextLorDIndex = 2 * cellData[index].upStagIndex;
+    VstaggeredData[cellData[index].downStagIndex].RorUIndex = 2 * cellData[index].downStagIndex + 1;
+    if (ID.y == TexSize.y)
+    {
+        cellData[index].edge.x = 0;
+        cellData[index].obstacles = 1;
+        
+        VstaggeredData[cellData[index].upStagIndex].velocity = 0;
+        VstaggeredData[cellData[index].upStagIndex].nextLorDIndex = -1;
+        VstaggeredData[cellData[index].upStagIndex].RorUIndex = 2 * cellData[index].upStagIndex + 1;
+    }
+}
+
+[numthreads(32, 32, 1)]
+void AddForce(uint3 id : SV_DispatchThreadID)
+{
+    int2 ID = int2(id.x, TexSize.y - id.y);
+    int index = UvToIndex(ID, TexSize);
+    float2 uv = ID * inverseTexSize;
+    
+    float len = length(uv - MousePos0);
+    len *= len;
+    
+    float strength_mouse = 1 - saturate(len / ForceSize);
+    strength_mouse *= strength_mouse * MouseTint;
+    
+    if (strength_mouse == 0)
+    {
+        return;
+    }
+
+    cellData[index].velocity += ForceDir * strength_mouse;
+    cellData[index].velocity = max(-MaxVelocity, min(MaxVelocity, cellData[index].velocity));
+    cellData[index].density += strength_mouse;
+    cellData[index].density = saturate(cellData[index].density);
+}
+[numthreads(32, 32, 1)]
+void Advect(uint3 id : SV_DispatchThreadID)
+{
+    int2 ID = int2(id.x, TexSize.y - id.y);
+    int index = UvToIndex(ID, TexSize);
+    
+    float obs = cellData[index].obstacles;
+    if (obs > 0.99)
+    {
+        FluidTex[ID] = float4(obstaclesCol.rgb, 1);
+        cellData[index].velocity = float2(0, 0);
+        cellData[index].density = 0;
+        return;
+    }
+
+    float2 Average_v = float2(0, 0);
+    float2 Average_num = float2(0, 0);
+    int currObs = step(obs, 0.99);
+    
+    //水平
+    int tempedge;
+    int2 uv;
+    int neiIndex;
+    int tempstep;
+    Average_v.x += UstaggeredData[cellData[index].leftStagIndex].velocity * currObs;
+    Average_num.x += currObs;
+    
+    tempedge = cellData[index].edge.x;
+    uv = ID + offset_u * tempedge;
+    neiIndex = UvToIndex(uv, TexSize);
+    tempstep = step(cellData[neiIndex].obstacles, 0.99);
+    neiIndex = UvToIndex2(uv, TexSize);
+    Average_v.x += UstaggeredData[neiIndex].velocity * tempedge * tempstep * 0.707;
+    Average_num.x += tempedge * tempstep * 0.707;
+    
+    tempedge = cellData[index].edge.y;
+    uv = ID + offset_d * tempedge;
+    neiIndex = UvToIndex(uv, TexSize);
+    tempstep = step(cellData[neiIndex].obstacles, 0.99);
+    neiIndex = UvToIndex2(uv, TexSize);
+    Average_v.x += UstaggeredData[neiIndex].velocity * tempedge * tempstep * 0.707;
+    Average_num.x += tempedge * tempstep * 0.707;
+    
+    tempedge = cellData[index].edge.w;
+    uv = ID + offset_r * tempedge;
+    neiIndex = UvToIndex(uv, TexSize);
+    tempstep = step(cellData[neiIndex].obstacles, 0.99);
+    Average_v.x += UstaggeredData[cellData[index].rightStagIndex].velocity * tempedge * tempstep;
+    Average_num.x += tempedge * tempstep;
+    
+    tempedge = cellData[index].edge.x * cellData[index].edge.w;
+    uv = ID + (offset_u + offset_r) * tempedge;
+    neiIndex = UvToIndex(uv, TexSize);
+    tempstep = step(cellData[neiIndex].obstacles, 0.99);
+    neiIndex = UvToIndex2(uv, TexSize);
+    Average_v.x += UstaggeredData[neiIndex].velocity * tempedge * tempstep * 0.707;
+    Average_num.x += tempedge * tempstep * 0.707;
+    
+    tempedge = cellData[index].edge.y * cellData[index].edge.w;
+    uv = ID + (offset_d + offset_r) * tempedge;
+    neiIndex = UvToIndex(uv, TexSize);
+    tempstep = step(cellData[neiIndex].obstacles, 0.99);
+    neiIndex = UvToIndex2(uv, TexSize);
+    Average_v.x += UstaggeredData[neiIndex].velocity * tempedge * tempstep * 0.707;
+    Average_num.x += tempedge * tempstep * 0.707;
+    
+    //垂直
+    Average_v.y += VstaggeredData[cellData[index].downStagIndex].velocity * currObs;
+    Average_num.y += currObs;
+    
+    tempedge = cellData[index].edge.z;
+    uv = ID + offset_l * tempedge;
+    neiIndex = UvToIndex(uv, TexSize);
+    tempstep = step(cellData[neiIndex].obstacles, 0.99);
+    Average_v.y += VstaggeredData[neiIndex].velocity * tempedge * tempstep * 0.707;
+    Average_num.y += tempedge * tempstep * 0.707;
+    
+    tempedge = cellData[index].edge.w;
+    uv = ID + offset_r * tempedge;
+    neiIndex = UvToIndex(uv, TexSize);
+    tempstep = step(cellData[neiIndex].obstacles, 0.99);
+    Average_v.y += VstaggeredData[neiIndex].velocity * tempedge * tempstep * 0.707;
+    Average_num.y += tempedge * tempstep * 0.707;
+    
+    tempedge = cellData[index].edge.x;
+    uv = ID + offset_u * tempedge;
+    neiIndex = UvToIndex(uv, TexSize);
+    tempstep = step(cellData[neiIndex].obstacles, 0.99);
+    Average_v.y += VstaggeredData[cellData[index].upStagIndex].velocity * tempedge * tempstep;
+    Average_num.y += tempedge * tempstep;
+    
+    tempedge = cellData[index].edge.z * cellData[index].edge.x;
+    uv = ID + (offset_l + offset_u) * tempedge;
+    neiIndex = UvToIndex(uv, TexSize);
+    tempstep = step(cellData[neiIndex].obstacles, 0.99);
+    Average_v.y += VstaggeredData[neiIndex].velocity * tempedge * tempstep * 0.707;
+    Average_num.y += tempedge * tempstep * 0.707;
+    
+    tempedge = cellData[index].edge.w * cellData[index].edge.x;
+    uv = ID + (offset_r + offset_u) * tempedge;
+    neiIndex = UvToIndex(uv, TexSize);
+    tempstep = step(cellData[neiIndex].obstacles, 0.99);
+    Average_v.y += VstaggeredData[neiIndex].velocity * tempedge * tempstep * 0.707;
+    Average_num.y += tempedge * tempstep * 0.707;
+    
+    if (Average_num.x == 0 && Average_num.y == 0)
+    {
+        cellData[index].velocity = float2(0, 0);
+        cellData[index].density = 0;
+        return;
+    }
+
+    Average_v = -Average_v / max(float2(0.707, 0.707), Average_num);
+    Average_v *= TimeStep;
+
+    int2 velo_i = floor(Average_v);
+    float velo_p_u = frac(Average_v.x); //frac(-5.1) = -5.1 - (-6) = 0.9
+    float velo_p_v = frac(Average_v.y);
+
+    //距离偏移后最近的四个格子，上下左右都需判断，这里始终认为偏移后的格子位于左下
+    int newuv_l = ID.x + velo_i.x;
+    int newuv_r = newuv_l + 1;
+    int newuv_d = ID.y + velo_i.y;
+    int newuv_u = newuv_d + 1;
+
+    newuv_l = max(0, min(TexSize.x, newuv_l));
+    newuv_r = max(0, min(TexSize.x, newuv_r));
+    newuv_d = max(0, min(TexSize.y, newuv_d));
+    newuv_u = max(0, min(TexSize.y, newuv_u));
+
+    int ind_lu = UvToIndex(int2(newuv_l, newuv_u), TexSize);
+    int ind_ld = UvToIndex(int2(newuv_l, newuv_d), TexSize);
+    int ind_ru = UvToIndex(int2(newuv_r, newuv_u), TexSize);
+    int ind_rd = UvToIndex(int2(newuv_r, newuv_d), TexSize);
+    
+    float oneMinusObs = 1 - obs;
+
+    float2 lud_velo = lerp(cellData[ind_ld].velocity, cellData[ind_lu].velocity, velo_p_v);
+    float2 rud_velo = lerp(cellData[ind_rd].velocity, cellData[ind_ru].velocity, velo_p_v);
+    cellData[index].velocity = lerp(lud_velo, rud_velo, velo_p_u) * oneMinusObs;
+    
+    float lud_den = lerp(cellData[ind_ld].density, cellData[ind_lu].density, velo_p_v);
+    float rud_den = lerp(cellData[ind_rd].density, cellData[ind_ru].density, velo_p_v);
+    cellData[index].density = lerp(lud_den, rud_den, velo_p_u) * densityDissipation * max(oneMinusObs, 0.999);
+    
+    float3 finalCol = float3(obstaclesCol.rgb * obs + cellData[index].density * oneMinusObs * float3(1, 1, 1));
+    
+    //FluidTex[ID] = abs(float4(cellData[index].velocity, 0, 1));
+    FluidTex[ID] = float4(finalCol, 1);
+}
+//粘度项Viscosity
+//[numthreads(32, 32, 1)]
+//void Viscosity(uint3 id : SV_DispatchThreadID)
+//{
+//    int2 ID = int2(id.x, TexSize.y - id.y);
+//    int index = UvToIndex(ID, TexSize);
+//}
+float GetCurl(int2 ID)
+{
+    int2 ID_l = ID + offset_l;
+    int2 ID_r = ID + offset_r;
+    int2 ID_d = ID + offset_d;
+    int2 ID_u = ID + offset_u;
+
+    float L = cellData[UvToIndex(ID_l, TexSize)].velocity.y;
+    float R = cellData[UvToIndex(ID_r, TexSize)].velocity.y;
+    float D = cellData[UvToIndex(ID_d, TexSize)].velocity.x;
+    float U = cellData[UvToIndex(ID_u, TexSize)].velocity.x;
+    
+    return R - L - U + D;
+}
+[numthreads(32, 32, 1)]
+void VorticityConfinement(uint3 id : SV_DispatchThreadID)
+{
+    int2 ID = int2(id.x, TexSize.y - id.y);
+    int index = UvToIndex(ID, TexSize);
+    
+    int2 ID_l = ID + offset_l;
+    int2 ID_r = ID + offset_r;
+    int2 ID_d = ID + offset_d;
+    int2 ID_u = ID + offset_u;
+
+    float C = GetCurl(ID);
+    float L = GetCurl(ID_l);
+    float R = GetCurl(ID_r);
+    float D = GetCurl(ID_d);
+    float U = GetCurl(ID_u);
+    
+    float2 force = float2(abs(U) - abs(D), abs(R) - abs(L));
+    force *= 1.0 / length(force + 0.0001) * C * CurlTint;
+    CurlData[index] = force * TimeStep;
+}
+[numthreads(32, 32, 1)]
+void VelocityTemp(uint3 id : SV_DispatchThreadID)
+{
+    int2 ID = int2(id.x, TexSize.y - id.y);
+    int index = UvToIndex(ID, TexSize);
+
+    int obs = step(cellData[index].obstacles, 0.99);
+    float2 velo = cellData[index].velocity + CurlData[index];
+    
+    UstaggeredData[cellData[index].leftStagIndex].velocity = clamp(velo.x * obs, -MaxVelocity, MaxVelocity);
+    VstaggeredData[cellData[index].downStagIndex].velocity = clamp(velo.y * obs, -MaxVelocity, MaxVelocity);
+}
+[numthreads(32, 32, 1)]
+void UpdateVelocityTemp(uint3 id : SV_DispatchThreadID)
+{
+    int2 ID = int2(id.x, TexSize.y - id.y);
+    int index = UvToIndex(ID, TexSize);
+    int2 ID2 = ID + cellData[index].velocity;
+    int index2 = UvToIndex(ID2, TexSize);
+
+    //1：无障碍及边界
+    int obs_l = step(cellData[UvToIndex(ID, TexSize)].obstacles, 0.99) * cellData[index].edge.z;
+    int obs_d = step(cellData[UvToIndex(ID, TexSize)].obstacles, 0.99) * cellData[index].edge.y;
+    int obs_u = step(cellData[UvToIndex(ID + offset_u * cellData[index].edge.x, TexSize)].obstacles, 0.99) * cellData[index].edge.x;
+    int obs_r = step(cellData[UvToIndex(ID + offset_r * cellData[index].edge.w, TexSize)].obstacles, 0.99) * cellData[index].edge.w;
+    
+    int num = obs_u + obs_r + obs_l + obs_d;
+    if (num == 0)
+    {
+        return;
+    }
+    
+    int leftStagInd = cellData[index].leftStagIndex;
+    int rightStagInd = cellData[index].rightStagIndex;
+    int downStagInd = cellData[index].downStagIndex;
+    int upStagInd = cellData[index].upStagIndex;
+
+    float divergence = (UstaggeredData[rightStagInd].velocity * obs_r - UstaggeredData[leftStagInd].velocity * obs_l +
+                        VstaggeredData[upStagInd].velocity * obs_u - VstaggeredData[downStagInd].velocity * obs_d) / num;
+
+    UTempVeloData[UstaggeredData[leftStagInd].nextLorDIndex] = -divergence * obs_r;
+    UTempVeloData[UstaggeredData[leftStagInd].RorUIndex] = divergence * obs_l;
+    VTempVeloData[VstaggeredData[downStagInd].nextLorDIndex] = -divergence * obs_u;
+    VTempVeloData[VstaggeredData[downStagInd].RorUIndex] = divergence * obs_d;
+}
+[numthreads(32, 32, 1)]
+void UpdateVelocityStag(uint3 id : SV_DispatchThreadID)
+{
+    int2 ID = int2(id.x, TexSize.y - id.y);
+    int index = UvToIndex(ID, TexSize);
+    
+    int leftStagInd = cellData[index].leftStagIndex;
+    int downStagInd = cellData[index].downStagIndex;
+    
+    int leftStagTemp = UstaggeredData[leftStagInd].RorUIndex;
+    int downStagTemp = VstaggeredData[downStagInd].RorUIndex;
+
+    UstaggeredData[leftStagInd].velocity += UTempVeloData[leftStagTemp] + UTempVeloData[leftStagTemp - 1];
+    VstaggeredData[downStagInd].velocity += VTempVeloData[downStagTemp] + VTempVeloData[downStagTemp - 1];
+    
+    UTempVeloData[leftStagTemp] = 0;
+    UTempVeloData[leftStagTemp - 1] = 0;
+    VTempVeloData[downStagTemp] = 0;
+    VTempVeloData[downStagTemp - 1] = 0;
+}
+[numthreads(32, 32, 1)]
+void UpdateVelocity(uint3 id : SV_DispatchThreadID)
+{
+    int2 ID = int2(id.x, TexSize.y - id.y);
+    int index = UvToIndex(ID, TexSize);
+    
+    int leftStagInd = cellData[index].leftStagIndex;
+    int rightStagInd = cellData[index].rightStagIndex;
+    int downStagInd = cellData[index].downStagIndex;
+    int upStagInd = cellData[index].upStagIndex;
+
+    float2 velo = float2((UstaggeredData[leftStagInd].velocity + UstaggeredData[rightStagInd].velocity) * 0.5,
+                         (VstaggeredData[downStagInd].velocity + VstaggeredData[upStagInd].velocity) * 0.5)
+                        * cellData[index].veloDissipation;
+    cellData[index].velocity = velo;
+}
+//[numthreads(32, 32, 1)]
+//void Divergence(uint3 id : SV_DispatchThreadID)
+//{
+//    int2 ID = int2(id.x, TexSize.y - id.y);
+//    int2 ID_r = ID + offset_r;
+//    int2 ID_u = ID + offset_u;
+    
+//    int index_c = UvToIndex(ID, TexSize);
+//    int index_u = UvToIndex(ID_u, TexSize);
+    
+//    int UStaIndex_l = UvToIndex2(ID, TexSize);
+//    int UStaIndex_r = UvToIndex2(ID_r, TexSize);
+    
+//    float w_u = UstaggeredData[UStaIndex_r].velocity - UstaggeredData[UStaIndex_l].velocity;
+//    float w_v = VstaggeredData[index_u].velocity - VstaggeredData[index_c].velocity;
+
+//    cellData[index_c].divergence = 1 / (float) (TexSize + 1) * 0.5 * (w_u + w_v);
+//}
+//[numthreads(32, 32, 1)]
+//void ComputePressure(uint3 id : SV_DispatchThreadID)
+//{
+//    int2 ID = int2(id.x, TexSize.y - id.y);
+//    int index_c = UvToIndex(ID, TexSize);
+
+//    int index_u = UvToIndex(ID + offset_u * cellData[index_c].edge.x, TexSize);
+//    int index_d = UvToIndex(ID + offset_d * cellData[index_c].edge.y, TexSize);
+//    int index_l = UvToIndex(ID + offset_l * cellData[index_c].edge.z, TexSize);
+//    int index_r = UvToIndex(ID + offset_r * cellData[index_c].edge.w, TexSize);
+
+//    float pre_u = cellData[index_u].pressure;
+//    float pre_d = cellData[index_d].pressure;
+//    float pre_l = cellData[index_l].pressure;
+//    float pre_r = cellData[index_r].pressure;
+//    float pre_c = cellData[index_c].pressure;
+    
+//    if (cellData[index_u].obstacles > 0.9)
+//        pre_u = pre_c;
+//    if (cellData[index_d].obstacles > 0.9)
+//        pre_u = pre_c;
+//    if (cellData[index_l].obstacles > 0.9)
+//        pre_u = pre_c;
+//    if (cellData[index_r].obstacles > 0.9)
+//        pre_u = pre_c;
+
+//    cellData[index_c].pressure = (pre_u + pre_d + pre_l + pre_r - cellData[index_c].divergence * TexSize.x) * 0.25;
+//}
+//[numthreads(32, 32, 1)]
+//void SubtractPressureGradient(uint3 id : SV_DispatchThreadID)
+//{
+//    int2 ID = int2(id.x, TexSize.y - id.y);
+//    int index_c = UvToIndex(ID, TexSize);
+
+//    int index_u = UvToIndex(ID + offset_u * cellData[index_c].edge.x, TexSize);
+//    int index_d = UvToIndex(ID + offset_d * cellData[index_c].edge.y, TexSize);
+//    int index_l = UvToIndex(ID + offset_l * cellData[index_c].edge.z, TexSize);
+//    int index_r = UvToIndex(ID + offset_r * cellData[index_c].edge.w, TexSize);
+    
+//    float pre_u = cellData[index_u].pressure;
+//    float pre_d = cellData[index_d].pressure;
+//    float pre_l = cellData[index_l].pressure;
+//    float pre_r = cellData[index_r].pressure;
+//    float pre_c = cellData[index_c].pressure;
+    
+//    if (cellData[index_u].obstacles > 0.9)
+//        pre_u = pre_c;
+//    if (cellData[index_d].obstacles > 0.9)
+//        pre_u = pre_c;
+//    if (cellData[index_l].obstacles > 0.9)
+//        pre_u = pre_c;
+//    if (cellData[index_r].obstacles > 0.9)
+//        pre_u = pre_c;
+    
+//    float2 p_d = float2(pre_r - pre_l, pre_u - pre_d);
+//    p_d *= gradientScale;
+    
+//    cellData[index_c].velocity -= p_d;
+//}
+
+[numthreads(32, 32, 1)]
+void UseForceTex(uint3 id : SV_DispatchThreadID)
+{
+    int2 ID = int2(id.x, TexSize.y - id.y);
+    int index = UvToIndex(ID, TexSize);
+    
+    float2 staggeredF = (ForceTex[ID].rg - ForceTex[ID].a * 0.5) * max(ForceTex[ID].a * 2, 1) * 0.1;
+    cellData[index].velocity += staggeredF;
+}
+[numthreads(32, 32, 1)]
+void UseObstaclesTex(uint3 id : SV_DispatchThreadID)
+{
+    int2 ID = int2(id.x, TexSize.y - id.y);
+    int index = UvToIndex(ID, TexSize);
+
+    cellData[index].obstacles = ObstaclesTex[ID].r;
+    
+    if (!all(cellData[index].edge))
+    {
+        cellData[index].obstacles = 1;
+    }
+}
