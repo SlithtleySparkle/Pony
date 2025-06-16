@@ -213,10 +213,6 @@ public class GrabNormalRenderFeature : ScriptableRendererFeature
             cmd.Clear();
             CommandBufferPool.Release(cmd);
         }
-        public override void OnCameraCleanup(CommandBuffer cmd)
-        {
-            GrabNormalTex?.Release();
-        }
         public void DisposeTex()
         {
             GrabNormalTex?.Release();
